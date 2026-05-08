@@ -112,7 +112,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("failed to login: %v", err)
 	}
 
-	raw, err := c.Call("certificate.query", 60, []interface{}{
+	raw, err := callAPI(c, "certificate.query", 60, []interface{}{
 		[]interface{}{
 			[]interface{}{"name", "=", certName},
 		},
@@ -123,7 +123,6 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 	var existingCerts []map[string]interface{}
 	if err := json.Unmarshal(raw, &existingCerts); err != nil {
-		fmt.Printf("DEBUG: raw response: %s\n", string(raw))
 		return fmt.Errorf("failed to unmarshal existing certificates: %v", err)
 	}
 
@@ -141,7 +140,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 			PrivateKey:  key,
 			Passphrase:  nil,
 		}
-		_, err = c.Call("certificate.update", 60, []interface{}{certID, updatePayload})
+		_, err = callAPI(c, "certificate.update", 60, []interface{}{certID, updatePayload})
 		if err != nil {
 			return fmt.Errorf("failed to update certificate: %v", err)
 		}
@@ -174,7 +173,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 	}
 
 	fmt.Printf("Step 5: Applying certificate ID %d to Web UI...\n", certID)
-	_, err = c.Call("system.general.update", 60, []interface{}{
+	_, err = callAPI(c, "system.general.update", 60, []interface{}{
 		map[string]interface{}{"ui_certificate": certID},
 	})
 	if err != nil {
@@ -182,13 +181,35 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 	}
 
 	fmt.Println("Step 6: Restarting Web UI service...")
-	_, err = c.Call("system.general.ui_restart", 60, nil)
+	_, err = callAPI(c, "system.general.ui_restart", 60, nil)
 	if err != nil {
 		fmt.Printf("Note: UI restart triggered (Connection might close): %v\n", err)
 	}
 
 	fmt.Println("--- SUCCESS ---")
 	return nil
+}
+
+func callAPI(c TNClient, method string, timeout int64, params interface{}) (json.RawMessage, error) {
+	raw, err := c.Call(method, timeout, params)
+	if err != nil {
+		return nil, err
+	}
+
+	var response struct {
+		Result json.RawMessage `json:"result"`
+		Error  interface{}     `json:"error"`
+	}
+
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse API response envelope: %w", err)
+	}
+
+	if response.Error != nil {
+		return nil, fmt.Errorf("API error: %v", response.Error)
+	}
+
+	return response.Result, nil
 }
 
 func getEnv(key, fallback string) string {

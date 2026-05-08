@@ -30,21 +30,24 @@ func TestProcessCertificate_Update(t *testing.T) {
 	mock := &mockTNClient{
 		loginFunc: func(user, pass, token string) error { return nil },
 		callFunc: func(method string, timeout int64, params interface{}) (json.RawMessage, error) {
+			var result interface{}
 			switch method {
 			case "certificate.query":
-				res := []map[string]interface{}{
+				result = []map[string]interface{}{
 					{"id": float64(123), "name": "test-cert"},
 				}
-				data, _ := json.Marshal(res)
-				return json.RawMessage(data), nil
-			case "certificate.update":
-				return json.RawMessage(`true`), nil
-			case "system.general.update":
-				return json.RawMessage(`true`), nil
-			case "system.general.ui_restart":
-				return json.RawMessage(`true`), nil
+			case "certificate.update", "system.general.update", "system.general.ui_restart":
+				result = true
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
 			}
-			return nil, fmt.Errorf("unexpected method: %s", method)
+			data, _ := json.Marshal(map[string]interface{}{
+				"result":  result,
+				"error":   nil,
+				"id":      1,
+				"jsonrpc": "2.0",
+			})
+			return json.RawMessage(data), nil
 		},
 		closeFunc: func() error { return nil },
 	}
@@ -59,15 +62,22 @@ func TestProcessCertificate_Create(t *testing.T) {
 	mock := &mockTNClient{
 		loginFunc: func(user, pass, token string) error { return nil },
 		callFunc: func(method string, timeout int64, params interface{}) (json.RawMessage, error) {
+			var result interface{}
 			switch method {
 			case "certificate.query":
-				return json.RawMessage(`[]`), nil
-			case "system.general.update":
-				return json.RawMessage(`true`), nil
-			case "system.general.ui_restart":
-				return json.RawMessage(`true`), nil
+				result = []interface{}{}
+			case "system.general.update", "system.general.ui_restart":
+				result = true
+			default:
+				return nil, fmt.Errorf("unexpected method: %s", method)
 			}
-			return nil, fmt.Errorf("unexpected method: %s", method)
+			data, _ := json.Marshal(map[string]interface{}{
+				"result":  result,
+				"error":   nil,
+				"id":      1,
+				"jsonrpc": "2.0",
+			})
+			return json.RawMessage(data), nil
 		},
 		callWithJobFunc: func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
 			if method == "certificate.create" {

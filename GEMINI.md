@@ -19,7 +19,8 @@ The project is structured as a Golang monorepo:
 - **Dependencies:** Managed via Go modules (`go.mod`, `go.sum`) in the root directory.
 
 ## Development Conventions
-- **Language Standards:** Follow idiomatic Go patterns.
+- **Language Standards:** Follow idiomatic Go patterns. Use strong types &
+  structs instead of `map`'s.
 - **Testing:**
   - Write unit tests for all Go scripts and packages.
   - Bash scripts are exempt from mandatory testing but should be kept simple.
