@@ -123,6 +123,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 	var existingCerts []map[string]interface{}
 	if err := json.Unmarshal(raw, &existingCerts); err != nil {
+		fmt.Printf("DEBUG: raw response: %s\n", string(raw))
 		return fmt.Errorf("failed to unmarshal existing certificates: %v", err)
 	}
 
