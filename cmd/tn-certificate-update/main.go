@@ -34,7 +34,11 @@ func main() {
 		log.Fatal("TRUENAS_API_KEY environment variable is required")
 	}
 
-	dnsName := getEnv("DNS_NAME", "dwyfron.whale-chickadee.ts.net")
+	dnsName := os.Getenv("DNS_NAME")
+	if dnsName == "" {
+		log.Fatal("DNS_NAME environment variable is required")
+	}
+
 	certName := getEnv("CERT_NAME", "Tailscale-Auto-Cert")
 	containerName := getEnv("CONTAINER_NAME", "ix-tailscale-tailscale-1")
 	apiHost := getEnv("TRUENAS_HOST", "localhost")
@@ -66,7 +70,7 @@ func main() {
 		protocol = "wss"
 	}
 	url := fmt.Sprintf("%s://%s/api/current", protocol, apiHost)
-	
+
 	c, err := truenas_api.NewClient(url, false)
 	if err != nil {
 		log.Fatalf("Failed to connect to TrueNAS API: %v", err)
@@ -123,7 +127,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to create certificate: %v", err)
 		}
-		
+
 		fmt.Printf("Job %d started, waiting for completion...\n", job.ID)
 		state := <-job.DoneCh
 		if state != "SUCCESS" {
