@@ -5,10 +5,10 @@ This repository contains scripts and tools for managing a TrueNAS Scale 25.10.x 
 ## Project Overview
 - **Purpose:** Automate management tasks for a specific TrueNAS Scale instance (UGREEN DXP4800 Plus).
 - **Primary Language:** Golang.
-- **API Communication:** JSON-RPC 2.0 over WebSockets using the [TrueNAS API Client](https://github.com/truenas/api_client).
+- **API Communication:** JSON-RPC 2.0 over WebSockets using the [TrueNAS API Client](https://github.com/truenas/api_client_golang).
 - **Target System:** TrueNAS Scale 25.10.x.
   - **Hardware:** UGREEN DXP4800 Plus, 64GB RAM.
-  - **Storage:** 
+  - **Storage:**
     - Pool `Tank`: 4x12TB HDD.
     - Pool `Flash`: 2x4TB NVMe SSD.
 
@@ -20,7 +20,7 @@ The project is structured as a Golang monorepo:
 
 ## Development Conventions
 - **Language Standards:** Follow idiomatic Go patterns.
-- **Testing:** 
+- **Testing:**
   - Write unit tests for all Go scripts and packages.
   - Bash scripts are exempt from mandatory testing but should be kept simple.
   - Command: `go test ./...`

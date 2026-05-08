@@ -13,8 +13,8 @@ It uses JSON-RPC 2.0 Protocol over websockets.
 ## Best Practices
 
 - Write all scripts in Golang, using the
-  https://github.com/truenas/api_client websocket client where possible.
-- Write tests for all scripts unless they're written in bash.
+  github.com/truenas/api_client_golang websocket client where possible.
+- Write tests for all scripts unless the script is written in bash.
 - Structure this repo as you would a Golang mono repo: commands in
   `cmd/<command_name>/main.go`, with shared code in `<module_name/` in the
   root of this directory. Use Go modules with `go.mod` and `go.sum` in the
