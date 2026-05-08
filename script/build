@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+sudo docker run \
+    --rm \
+    -v "$(pwd):$(pwd)" \
+    --workdir "$(pwd)" \
+    golang \
+    go build -buildvcs=false ./cmd/...
