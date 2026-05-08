@@ -33,20 +33,25 @@ func TestProcessCertificate_Update(t *testing.T) {
 			var result interface{}
 			switch method {
 			case "certificate.query":
-				result = []map[string]interface{}{
-					{"id": float64(123), "name": "test-cert"},
+				result = []Certificate{
+					{ID: 123, Name: "test-cert"},
 				}
 			case "certificate.update", "system.general.update", "system.general.ui_restart":
 				result = true
 			default:
 				return nil, fmt.Errorf("unexpected method: %s", method)
 			}
-			data, _ := json.Marshal(map[string]interface{}{
+			data, _ := json.Marshal(RPCResponse{
+				Result: nil, // will be overwritten if marshaled together, but easier to just marshal the whole thing
+			})
+			// Actually need to marshal the whole envelope
+			envelope := map[string]interface{}{
 				"result":  result,
 				"error":   nil,
 				"id":      1,
 				"jsonrpc": "2.0",
-			})
+			}
+			data, _ = json.Marshal(envelope)
 			return json.RawMessage(data), nil
 		},
 		closeFunc: func() error { return nil },

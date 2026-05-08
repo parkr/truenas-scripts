@@ -26,6 +26,30 @@ type CertificateCreatePayload struct {
 	Passphrase  *string `json:"passphrase"`
 }
 
+type Certificate struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type SystemGeneralUpdatePayload struct {
+	UICertificate int64 `json:"ui_certificate"`
+}
+
+type RPCResponse struct {
+	Result json.RawMessage `json:"result"`
+	Error  *RPCError       `json:"error"`
+}
+
+type RPCError struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
+}
+
+func (e *RPCError) Error() string {
+	return fmt.Sprintf("API error %d: %s", e.Code, e.Message)
+}
+
 var runCommand = func(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stderr = os.Stderr
@@ -121,18 +145,14 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("failed to query certificates: %v", err)
 	}
 
-	var existingCerts []map[string]interface{}
+	var existingCerts []Certificate
 	if err := json.Unmarshal(raw, &existingCerts); err != nil {
 		return fmt.Errorf("failed to unmarshal existing certificates: %v", err)
 	}
 
 	var certID int64
 	if len(existingCerts) > 0 {
-		idFloat, ok := existingCerts[0]["id"].(float64)
-		if !ok {
-			return fmt.Errorf("unexpected ID type: %T", existingCerts[0]["id"])
-		}
-		certID = int64(idFloat)
+		certID = existingCerts[0].ID
 		fmt.Printf("Updating existing certificate (ID: %d)...\n", certID)
 
 		updatePayload := CertificateUpdatePayload{
@@ -174,14 +194,14 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 	fmt.Printf("Step 5: Applying certificate ID %d to Web UI...\n", certID)
 	_, err = callAPI(c, "system.general.update", 60, []interface{}{
-		map[string]interface{}{"ui_certificate": certID},
+		SystemGeneralUpdatePayload{UICertificate: certID},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update system UI certificate: %v", err)
 	}
 
 	fmt.Println("Step 6: Restarting Web UI service...")
-	_, err = callAPI(c, "system.general.ui_restart", 60, nil)
+	_, err = callAPI(c, "system.general.ui_restart", 60, []interface{}{})
 	if err != nil {
 		fmt.Printf("Note: UI restart triggered (Connection might close): %v\n", err)
 	}
@@ -196,17 +216,13 @@ func callAPI(c TNClient, method string, timeout int64, params interface{}) (json
 		return nil, err
 	}
 
-	var response struct {
-		Result json.RawMessage `json:"result"`
-		Error  interface{}     `json:"error"`
-	}
-
+	var response RPCResponse
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, fmt.Errorf("failed to parse API response envelope: %w", err)
 	}
 
 	if response.Error != nil {
-		return nil, fmt.Errorf("API error: %v", response.Error)
+		return nil, response.Error
 	}
 
 	return response.Result, nil
