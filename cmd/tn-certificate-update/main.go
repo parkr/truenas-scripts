@@ -15,18 +15,16 @@ import (
 	"github.com/truenas/api_client_golang/truenas_api"
 )
 
-type CertificateUpdatePayload struct {
-	Certificate string  `json:"certificate"`
-	PrivateKey  string  `json:"privatekey"`
-	Passphrase  *string `json:"passphrase"`
-}
-
 type CertificateCreatePayload struct {
 	Name        string  `json:"name"`
 	CreateType  string  `json:"create_type"`
 	Certificate string  `json:"certificate"`
 	PrivateKey  string  `json:"privatekey"`
 	Passphrase  *string `json:"passphrase"`
+}
+
+type CertificateUpdatePayload struct {
+	Name string `json:"name,omitempty"`
 }
 
 type Certificate struct {
@@ -162,47 +160,48 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("failed to unmarshal existing certificates: %v", err)
 	}
 
-	var certID int64
+	var oldCertID int64
 	if len(existingCerts) > 0 {
-		certID = existingCerts[0].ID
-		fmt.Printf("Updating existing certificate (ID: %d)...\n", certID)
+		oldCertID = existingCerts[0].ID
+		newName := fmt.Sprintf("%s-old-%d", certName, time.Now().Unix())
+		fmt.Printf("Renaming existing certificate (ID: %d) to %s to avoid conflict...\n", oldCertID, newName)
 
 		updatePayload := CertificateUpdatePayload{
-			Certificate: cert,
-			PrivateKey:  key,
-			Passphrase:  nil,
+			Name: newName,
 		}
-		_, err = callAPI(c, "certificate.update", 60, []interface{}{certID, updatePayload})
+		job, err := c.CallWithJob("certificate.update", []interface{}{oldCertID, updatePayload}, nil)
 		if err != nil {
-			return fmt.Errorf("failed to update certificate: %v", err)
+			return fmt.Errorf("failed to trigger certificate rename: %v", err)
 		}
-	} else {
-		fmt.Println("Creating new certificate...")
-		createPayload := CertificateCreatePayload{
-			Name:        certName,
-			CreateType:  "CERTIFICATE_CREATE_IMPORTED",
-			Certificate: cert,
-			PrivateKey:  key,
-			Passphrase:  nil,
+		if _, err := waitForJob(job); err != nil {
+			return fmt.Errorf("certificate rename job failed: %v", err)
 		}
-
-		job, err := c.CallWithJob("certificate.create", []interface{}{createPayload}, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create certificate: %v", err)
-		}
-
-		fmt.Printf("Job %d started, waiting for completion...\n", job.ID)
-		state := <-job.DoneCh
-		if state != "SUCCESS" {
-			return fmt.Errorf("job failed with state: %s", state)
-		}
-
-		idFloat, ok := job.Result.(float64)
-		if !ok {
-			return fmt.Errorf("unexpected result type: %T", job.Result)
-		}
-		certID = int64(idFloat)
 	}
+
+	fmt.Println("Creating new certificate...")
+	createPayload := CertificateCreatePayload{
+		Name:        certName,
+		CreateType:  "CERTIFICATE_CREATE_IMPORTED",
+		Certificate: cert,
+		PrivateKey:  key,
+		Passphrase:  nil,
+	}
+
+	job, err := c.CallWithJob("certificate.create", []interface{}{createPayload}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to trigger certificate creation: %v", err)
+	}
+
+	result, err := waitForJob(job)
+	if err != nil {
+		return fmt.Errorf("certificate creation job failed: %v", err)
+	}
+
+	idFloat, ok := result.(float64)
+	if !ok {
+		return fmt.Errorf("unexpected result type for certificate ID: %T", result)
+	}
+	certID := int64(idFloat)
 
 	fmt.Printf("Step 5: Applying certificate ID %d to Web UI...\n", certID)
 	_, err = callAPI(c, "system.general.update", 60, []interface{}{
@@ -223,8 +222,29 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("deployment verification failed: %v", err)
 	}
 
+	if oldCertID != 0 {
+		fmt.Printf("Step 8: Deleting old certificate (ID: %d)...\n", oldCertID)
+		delJob, err := c.CallWithJob("certificate.delete", []interface{}{oldCertID}, nil)
+		if err != nil {
+			fmt.Printf("Warning: failed to trigger old certificate deletion: %v\n", err)
+		} else {
+			if _, err := waitForJob(delJob); err != nil {
+				fmt.Printf("Warning: old certificate deletion job failed: %v\n", err)
+			}
+		}
+	}
+
 	fmt.Println("--- SUCCESS ---")
 	return nil
+}
+
+func waitForJob(job *truenas_api.Job) (interface{}, error) {
+	fmt.Printf("Job %d started, waiting for completion...\n", job.ID)
+	state := <-job.DoneCh
+	if state != "SUCCESS" {
+		return nil, fmt.Errorf("job %d failed with state: %s", job.ID, state)
+	}
+	return job.Result, nil
 }
 
 func verifyDeployment(c TNClient, certID int64, expectedCert string) error {
