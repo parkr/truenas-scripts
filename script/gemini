@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Start a gemini session in a docker container
+# Usage: ./script/gemini
+
+docker run -it --rm \
+    --network host \
+    -v "$(pwd)":/app \
+    -w /app \
+    --env GEMINI_YOLO=true \
+    gemini-cli:latest
