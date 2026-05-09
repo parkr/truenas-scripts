@@ -10,10 +10,11 @@ import (
 )
 
 type mockTNClient struct {
-	loginFunc       func(user, pass, token string) error
-	callFunc        func(method string, timeout int64, params interface{}) (json.RawMessage, error)
-	callWithJobFunc func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error)
-	closeFunc       func() error
+	loginFunc           func(user, pass, token string) error
+	callFunc            func(method string, timeout int64, params interface{}) (json.RawMessage, error)
+	callWithJobFunc     func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error)
+	subscribeToJobsFunc func() error
+	closeFunc           func() error
 }
 
 func (m *mockTNClient) Login(user, pass, token string) error {
@@ -28,14 +29,22 @@ func (m *mockTNClient) CallWithJob(method string, params interface{}, callback f
 	if m.callWithJobFunc != nil {
 		return m.callWithJobFunc(method, params, callback)
 	}
-	// Default mock behavior if not specified
 	doneCh := make(chan string, 1)
-	doneCh <- "SUCCESS"
+	doneCh <- ""
 	return &truenas_api.Job{
-		ID:     1,
-		DoneCh: doneCh,
-		Result: 456.0,
+		ID:       1,
+		DoneCh:   doneCh,
+		Result:   456.0,
+		Finished: true,
+		State:    "SUCCESS",
 	}, nil
+}
+
+func (m *mockTNClient) SubscribeToJobs() error {
+	if m.subscribeToJobsFunc != nil {
+		return m.subscribeToJobsFunc()
+	}
+	return nil
 }
 
 func (m *mockTNClient) Close() error {
@@ -100,7 +109,7 @@ func TestProcessCertificate_Update(t *testing.T) {
 		},
 		callWithJobFunc: func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
 			doneCh := make(chan string, 1)
-			doneCh <- "SUCCESS"
+			doneCh <- ""
 			var result interface{}
 			switch method {
 			case "certificate.update":
@@ -114,9 +123,11 @@ func TestProcessCertificate_Update(t *testing.T) {
 				result = true
 			}
 			return &truenas_api.Job{
-				ID:     1,
-				DoneCh: doneCh,
-				Result: result,
+				ID:       1,
+				DoneCh:   doneCh,
+				Result:   result,
+				Finished: true,
+				State:    "SUCCESS",
 			}, nil
 		},
 		closeFunc: func() error { return nil },
@@ -181,7 +192,7 @@ func TestProcessCertificate_Create(t *testing.T) {
 		},
 		callWithJobFunc: func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
 			doneCh := make(chan string, 1)
-			doneCh <- "SUCCESS"
+			doneCh <- ""
 			var result interface{}
 			switch method {
 			case "certificate.create":
@@ -189,9 +200,11 @@ func TestProcessCertificate_Create(t *testing.T) {
 				result = 456.0
 			}
 			return &truenas_api.Job{
-				ID:     1,
-				DoneCh: doneCh,
-				Result: result,
+				ID:       1,
+				DoneCh:   doneCh,
+				Result:   result,
+				Finished: true,
+				State:    "SUCCESS",
 			}, nil
 		},
 		closeFunc: func() error { return nil },

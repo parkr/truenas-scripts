@@ -76,6 +76,7 @@ type TNClient interface {
 	Login(user, pass, token string) error
 	Call(method string, timeout int64, params interface{}) (json.RawMessage, error)
 	CallWithJob(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error)
+	SubscribeToJobs() error
 	Close() error
 }
 
@@ -146,6 +147,10 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("failed to login: %v", err)
 	}
 
+	if err := c.SubscribeToJobs(); err != nil {
+		return fmt.Errorf("failed to subscribe to job updates: %v", err)
+	}
+
 	raw, err := callAPI(c, "certificate.query", 60, []interface{}{
 		[]interface{}{
 			[]interface{}{"name", "=", certName},
@@ -199,7 +204,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 	idFloat, ok := result.(float64)
 	if !ok {
-		return fmt.Errorf("unexpected result type for certificate ID: %T", result)
+		return fmt.Errorf("unexpected result type for certificate ID: %T (Value: %v)", result, result)
 	}
 	certID := int64(idFloat)
 
@@ -240,9 +245,19 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 func waitForJob(job *truenas_api.Job) (interface{}, error) {
 	fmt.Printf("Job %d started, waiting for completion...\n", job.ID)
-	state := <-job.DoneCh
-	if state != "SUCCESS" {
-		return nil, fmt.Errorf("job %d failed with state: %s", job.ID, state)
+	for !job.Finished {
+		select {
+		case errMsg := <-job.DoneCh:
+			if errMsg != "" {
+				return nil, fmt.Errorf("job %d failed: %s", job.ID, errMsg)
+			}
+		case <-time.After(100 * time.Millisecond):
+			// Just to ensure we don't block forever if something is missed
+		}
+	}
+
+	if job.State != "SUCCESS" {
+		return nil, fmt.Errorf("job %d finished with state: %s", job.ID, job.State)
 	}
 	return job.Result, nil
 }
@@ -322,6 +337,10 @@ func callAPI(c TNClient, method string, timeout int64, params interface{}) (json
 	raw, err := c.Call(method, timeout, params)
 	if err != nil {
 		return nil, err
+	}
+
+	if os.Getenv("DEBUG") == "true" {
+		fmt.Printf("DEBUG: %s response: %s\n", method, string(raw))
 	}
 
 	var response RPCResponse
