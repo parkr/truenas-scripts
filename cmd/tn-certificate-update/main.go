@@ -85,7 +85,7 @@ func run() error {
 	}
 
 	certName := getEnv("CERT_NAME", "Tailscale-Auto-Cert")
-	serverURL := getEnv("TRUENAS_URL", "wss://localhost/api/websocket")
+	serverURL := getEnv("TRUENAS_URL", "wss://192.168.1.5/api/websocket")
 	insecure := getEnv("TRUENAS_INSECURE", "true") == "true"
 
 	fmt.Printf("Step 1: Generating/Updating certificate inside Tailscale container ix-tailscale-tailscale-1...\n")
