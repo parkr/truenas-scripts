@@ -85,7 +85,8 @@ func run() error {
 	}
 
 	certName := getEnv("CERT_NAME", "Tailscale-Auto-Cert")
-	serverURL := getEnv("TRUENAS_URL", "ws://localhost/api/websocket")
+	serverURL := getEnv("TRUENAS_URL", "wss://localhost/api/websocket")
+	insecure := getEnv("TRUENAS_INSECURE", "true") == "true"
 
 	fmt.Printf("Step 1: Generating/Updating certificate inside Tailscale container ix-tailscale-tailscale-1...\n")
 	cmd := exec.Command("docker", "exec", "ix-tailscale-tailscale-1", "tailscale", "cert", dnsName)
@@ -110,8 +111,8 @@ func run() error {
 		return fmt.Errorf("local certificate validation failed: %v", err)
 	}
 
-	fmt.Printf("Step 4: Connecting to TrueNAS API at %s...\n", serverURL)
-	c, err := truenas_api.NewClient(serverURL, false)
+	fmt.Printf("Step 4: Connecting to TrueNAS API at %s (Insecure: %v)...\n", serverURL, insecure)
+	c, err := truenas_api.NewClient(serverURL, !insecure)
 	if err != nil {
 		return fmt.Errorf("failed to create TN client at %s: %v", serverURL, err)
 	}
