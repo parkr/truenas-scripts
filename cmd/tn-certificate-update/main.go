@@ -30,8 +30,13 @@ type CertificateCreatePayload struct {
 }
 
 type Certificate struct {
-	ID   int64  `json:"id"`
-	Name string `json:"name"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Certificate string `json:"certificate"`
+}
+
+type SystemGeneralConfig struct {
+	UICertificate int64 `json:"ui_certificate"`
 }
 
 type SystemGeneralUpdatePayload struct {
@@ -213,8 +218,84 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		fmt.Printf("Note: UI restart triggered (Connection might close): %v\n", err)
 	}
 
+	fmt.Println("Step 7: Verifying deployment...")
+	if err := verifyDeployment(c, certID, cert); err != nil {
+		return fmt.Errorf("deployment verification failed: %v", err)
+	}
+
 	fmt.Println("--- SUCCESS ---")
 	return nil
+}
+
+func verifyDeployment(c TNClient, certID int64, expectedCert string) error {
+	// 1. Verify certificate content
+	raw, err := callAPI(c, "certificate.query", 60, []interface{}{
+		[]interface{}{
+			[]interface{}{"id", "=", certID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to query certificate for verification: %v", err)
+	}
+
+	var certs []Certificate
+	if err := json.Unmarshal(raw, &certs); err != nil {
+		return fmt.Errorf("failed to unmarshal certificate: %v", err)
+	}
+
+	if len(certs) == 0 {
+		return fmt.Errorf("certificate with ID %d not found after update", certID)
+	}
+
+	actualCert := strings.TrimSpace(certs[0].Certificate)
+	expectedCertClean := strings.TrimSpace(expectedCert)
+
+	if actualCert != expectedCertClean {
+		// If direct comparison fails, compare parsed certificates to ignore formatting differences
+		actualParsed, err := parsePEMCert(actualCert)
+		if err != nil {
+			return fmt.Errorf("failed to parse actual cert from TN: %v", err)
+		}
+		expectedParsed, err := parsePEMCert(expectedCertClean)
+		if err != nil {
+			return fmt.Errorf("failed to parse expected cert: %v", err)
+		}
+
+		if actualParsed.SerialNumber.Cmp(expectedParsed.SerialNumber) != 0 {
+			return fmt.Errorf("certificate mismatch: serial numbers do not match (Expected: %s, Actual: %s)",
+				expectedParsed.SerialNumber.String(), actualParsed.SerialNumber.String())
+		}
+		fmt.Println("Certificate content matches (via serial number verification).")
+	} else {
+		fmt.Println("Certificate content matches exactly.")
+	}
+
+	// 2. Verify system configuration
+	rawConfig, err := callAPI(c, "system.general.config", 60, nil)
+	if err != nil {
+		return fmt.Errorf("failed to query system configuration: %v", err)
+	}
+
+	var config SystemGeneralConfig
+	if err := json.Unmarshal(rawConfig, &config); err != nil {
+		return fmt.Errorf("failed to unmarshal system configuration: %v", err)
+	}
+
+	if config.UICertificate != certID {
+		return fmt.Errorf("system UI is NOT using the new certificate ID (Expected: %d, Actual: %d)",
+			certID, config.UICertificate)
+	}
+	fmt.Printf("System UI is correctly using certificate ID %d.\n", certID)
+
+	return nil
+}
+
+func parsePEMCert(pemData string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
 func callAPI(c TNClient, method string, timeout int64, params interface{}) (json.RawMessage, error) {

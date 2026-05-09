@@ -82,11 +82,25 @@ func TestProcessCertificate_Update(t *testing.T) {
 			var result interface{}
 			switch method {
 			case "certificate.query":
-				result = []Certificate{
-					{ID: 123, Name: "test-cert"},
+				// Distinguish between query-by-name (initial) and query-by-id (verification)
+				p := params.([]interface{})
+				filters := p[0].([]interface{})
+				if len(filters) > 0 {
+					filter := filters[0].([]interface{})
+					if filter[0].(string) == "name" {
+						result = []Certificate{
+							{ID: 123, Name: "test-cert", Certificate: "OLD CERT"},
+						}
+					} else if filter[0].(string) == "id" {
+						result = []Certificate{
+							{ID: 123, Name: "test-cert", Certificate: testCert},
+						}
+					}
 				}
 			case "certificate.update", "system.general.update", "system.general.ui_restart":
 				result = true
+			case "system.general.config":
+				result = SystemGeneralConfig{UICertificate: 123}
 			default:
 				return nil, fmt.Errorf("unexpected method: %s", method)
 			}
@@ -116,9 +130,28 @@ func TestProcessCertificate_Create(t *testing.T) {
 			var result interface{}
 			switch method {
 			case "certificate.query":
-				result = []interface{}{}
+				if params != nil {
+					p := params.([]interface{})
+					filters := p[0].([]interface{})
+					if len(filters) > 0 {
+						filter := filters[0].([]interface{})
+						if filter[0].(string) == "id" {
+							result = []Certificate{
+								{ID: 456, Name: "test-cert", Certificate: testCert},
+							}
+						} else {
+							result = []interface{}{}
+						}
+					} else {
+						result = []interface{}{}
+					}
+				} else {
+					result = []interface{}{}
+				}
 			case "system.general.update", "system.general.ui_restart":
 				result = true
+			case "system.general.config":
+				result = SystemGeneralConfig{UICertificate: 456}
 			default:
 				return nil, fmt.Errorf("unexpected method: %s", method)
 			}
