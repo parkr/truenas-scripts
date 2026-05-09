@@ -88,19 +88,19 @@ func run() error {
 	serverURL := getEnv("TRUENAS_URL", "ws://192.168.1.5/api/websocket")
 
 	fmt.Printf("Step 1: Generating/Updating certificate inside Tailscale container ix-tailscale-tailscale-1...\n")
-	cmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "tailscale", "cert", dnsName)
+	cmd := exec.Command("docker", "exec", "ix-tailscale-tailscale-1", "tailscale", "cert", dnsName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to generate cert: %v (Output: %s)", err, string(out))
 	}
 
 	fmt.Println("Step 2 & 3: Extracting certificate and key...")
-	certCmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "cat", dnsName+".crt")
+	certCmd := exec.Command("docker", "exec", "ix-tailscale-tailscale-1", "cat", dnsName+".crt")
 	cert, err := certCmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to extract cert: %v", err)
 	}
 
-	keyCmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "cat", dnsName+".key")
+	keyCmd := exec.Command("docker", "exec", "ix-tailscale-tailscale-1", "cat", dnsName+".key")
 	key, err := keyCmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to extract key: %v", err)
