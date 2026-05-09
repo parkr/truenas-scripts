@@ -44,6 +44,7 @@ type SystemGeneralUpdatePayload struct {
 type RPCResponse struct {
 	Result json.RawMessage `json:"result"`
 	Error  *RPCError       `json:"error"`
+	ID     interface{}     `json:"id"`
 }
 
 type RPCError struct {
@@ -52,32 +53,17 @@ type RPCError struct {
 	Data    interface{} `json:"data"`
 }
 
-func (e *RPCError) Error() string {
-	return fmt.Sprintf("API error %d: %s", e.Code, e.Message)
-}
-
-var runCommand = func(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-var runCommandOutput = func(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Stderr = os.Stderr
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
 type TNClient interface {
 	Login(user, pass, token string) error
 	Call(method string, timeout int64, params interface{}) (json.RawMessage, error)
-	CallWithJob(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error)
-	SubscribeToJobs() error
 	Close() error
+}
+
+type JobInfo struct {
+	ID     int64           `json:"id"`
+	State  string          `json:"state"`
+	Result json.RawMessage `json:"result"`
+	Error  interface{}     `json:"error"`
 }
 
 func main() {
@@ -99,47 +85,38 @@ func run() error {
 	}
 
 	certName := getEnv("CERT_NAME", "Tailscale-Auto-Cert")
-	containerName := getEnv("CONTAINER_NAME", "ix-tailscale-tailscale-1")
-	apiHost := getEnv("TRUENAS_HOST", "localhost")
+	serverURL := getEnv("TRUENAS_URL", "ws://192.168.1.5/api/websocket")
 
-	fmt.Printf("Step 1: Generating/Updating certificate inside Tailscale container %s...\n", containerName)
-	err := runCommand("sudo", "docker", "exec", containerName, "tailscale", "cert", "--min-validity", "720h", dnsName)
-	if err != nil {
-		return fmt.Errorf("failed to generate cert: %v", err)
+	fmt.Printf("Step 1: Generating/Updating certificate inside Tailscale container ix-tailscale-tailscale-1...\n")
+	cmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "tailscale", "cert", dnsName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to generate cert: %v (Output: %s)", err, string(out))
 	}
 
 	fmt.Println("Step 2 & 3: Extracting certificate and key...")
-	cert, err := runCommandOutput("sudo", "docker", "exec", containerName, "cat", "/"+dnsName+".crt")
+	certCmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "cat", dnsName+".crt")
+	cert, err := certCmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to read cert: %v", err)
+		return fmt.Errorf("failed to extract cert: %v", err)
 	}
-	key, err := runCommandOutput("sudo", "docker", "exec", containerName, "cat", "/"+dnsName+".key")
+
+	keyCmd := exec.Command("k3s", "kubectl", "exec", "-n", "ix-tailscale", "ix-tailscale-tailscale-1", "--", "cat", dnsName+".key")
+	key, err := keyCmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to read key: %v", err)
+		return fmt.Errorf("failed to extract key: %v", err)
 	}
 
-	if !strings.Contains(key, "PRIVATE KEY") {
-		return fmt.Errorf("CRITICAL: Key extraction failed. Content check failed")
+	if err := verifyLocalCert(string(cert)); err != nil {
+		return fmt.Errorf("local certificate validation failed: %v", err)
 	}
 
-	if err := verifyCertValidity(cert); err != nil {
-		return fmt.Errorf("certificate validity check failed: %v", err)
-	}
-
-	fmt.Println("Step 4: Managing Certificate in TrueNAS...")
-	protocol := "ws"
-	if apiHost != "localhost" && apiHost != "127.0.0.1" {
-		protocol = "wss"
-	}
-	url := fmt.Sprintf("%s://%s/api/current", protocol, apiHost)
-
-	c, err := truenas_api.NewClient(url, false)
+	c, err := truenas_api.NewClient(serverURL, false)
 	if err != nil {
-		return fmt.Errorf("failed to connect to TrueNAS API: %v", err)
+		return fmt.Errorf("failed to create TN client: %v", err)
 	}
 	defer c.Close()
 
-	return processCertificate(c, apiKey, certName, cert, key)
+	return processCertificate(c, apiKey, certName, string(cert), string(key))
 }
 
 func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
@@ -147,10 +124,7 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		return fmt.Errorf("failed to login: %v", err)
 	}
 
-	if err := c.SubscribeToJobs(); err != nil {
-		return fmt.Errorf("failed to subscribe to job updates: %v", err)
-	}
-
+	fmt.Println("Step 4: Managing Certificate in TrueNAS...")
 	raw, err := callAPI(c, "certificate.query", 60, []interface{}{
 		[]interface{}{
 			[]interface{}{"name", "=", certName},
@@ -174,11 +148,15 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		updatePayload := CertificateUpdatePayload{
 			Name: newName,
 		}
-		job, err := c.CallWithJob("certificate.update", []interface{}{oldCertID, updatePayload}, nil)
+		rawJob, err := callAPI(c, "certificate.update", 60, []interface{}{oldCertID, updatePayload})
 		if err != nil {
 			return fmt.Errorf("failed to trigger certificate rename: %v", err)
 		}
-		if _, err := waitForJob(job); err != nil {
+		var jobID int64
+		if err := json.Unmarshal(rawJob, &jobID); err != nil {
+			return fmt.Errorf("failed to parse job ID from rename: %v", err)
+		}
+		if _, err := waitForJob(c, jobID); err != nil {
 			return fmt.Errorf("certificate rename job failed: %v", err)
 		}
 	}
@@ -192,21 +170,24 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 		Passphrase:  nil,
 	}
 
-	job, err := c.CallWithJob("certificate.create", []interface{}{createPayload}, nil)
+	rawJob, err := callAPI(c, "certificate.create", 60, []interface{}{createPayload})
 	if err != nil {
 		return fmt.Errorf("failed to trigger certificate creation: %v", err)
 	}
+	var jobID int64
+	if err := json.Unmarshal(rawJob, &jobID); err != nil {
+		return fmt.Errorf("failed to parse job ID from creation: %v", err)
+	}
 
-	result, err := waitForJob(job)
+	result, err := waitForJob(c, jobID)
 	if err != nil {
 		return fmt.Errorf("certificate creation job failed: %v", err)
 	}
 
-	idFloat, ok := result.(float64)
-	if !ok {
-		return fmt.Errorf("unexpected result type for certificate ID: %T (Value: %v)", result, result)
+	var certID int64
+	if err := json.Unmarshal(result, &certID); err != nil {
+		return fmt.Errorf("unexpected result type for certificate ID: %v (Value: %s)", err, string(result))
 	}
-	certID := int64(idFloat)
 
 	fmt.Printf("Step 5: Applying certificate ID %d to Web UI...\n", certID)
 	_, err = callAPI(c, "system.general.update", 60, []interface{}{
@@ -229,12 +210,15 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 
 	if oldCertID != 0 {
 		fmt.Printf("Step 8: Deleting old certificate (ID: %d)...\n", oldCertID)
-		delJob, err := c.CallWithJob("certificate.delete", []interface{}{oldCertID}, nil)
+		rawDelJob, err := callAPI(c, "certificate.delete", 60, []interface{}{oldCertID})
 		if err != nil {
 			fmt.Printf("Warning: failed to trigger old certificate deletion: %v\n", err)
 		} else {
-			if _, err := waitForJob(delJob); err != nil {
-				fmt.Printf("Warning: old certificate deletion job failed: %v\n", err)
+			var delJobID int64
+			if err := json.Unmarshal(rawDelJob, &delJobID); err == nil {
+				if _, err := waitForJob(c, delJobID); err != nil {
+					fmt.Printf("Warning: old certificate deletion job failed: %v\n", err)
+				}
 			}
 		}
 	}
@@ -243,23 +227,37 @@ func processCertificate(c TNClient, apiKey, certName, cert, key string) error {
 	return nil
 }
 
-func waitForJob(job *truenas_api.Job) (interface{}, error) {
-	fmt.Printf("Job %d started, waiting for completion...\n", job.ID)
-	for !job.Finished {
-		select {
-		case errMsg := <-job.DoneCh:
-			if errMsg != "" {
-				return nil, fmt.Errorf("job %d failed: %s", job.ID, errMsg)
-			}
-		case <-time.After(100 * time.Millisecond):
-			// Just to ensure we don't block forever if something is missed
+func waitForJob(c TNClient, jobID int64) (json.RawMessage, error) {
+	fmt.Printf("Job %d started, waiting for completion...\n", jobID)
+	for {
+		raw, err := callAPI(c, "core.get_jobs", 60, []interface{}{
+			[]interface{}{
+				[]interface{}{"id", "=", jobID},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to poll job status: %v", err)
 		}
-	}
 
-	if job.State != "SUCCESS" {
-		return nil, fmt.Errorf("job %d finished with state: %s", job.ID, job.State)
+		var jobs []JobInfo
+		if err := json.Unmarshal(raw, &jobs); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal job status: %v", err)
+		}
+
+		if len(jobs) == 0 {
+			return nil, fmt.Errorf("job %d not found", jobID)
+		}
+
+		job := jobs[0]
+		if job.State == "SUCCESS" {
+			return job.Result, nil
+		}
+		if job.State == "FAILED" || job.State == "ABORTED" {
+			return nil, fmt.Errorf("job %d finished with state: %s (Error: %v)", jobID, job.State, job.Error)
+		}
+
+		time.Sleep(1 * time.Second)
 	}
-	return job.Result, nil
 }
 
 func verifyDeployment(c TNClient, certID int64, expectedCert string) error {
@@ -349,7 +347,7 @@ func callAPI(c TNClient, method string, timeout int64, params interface{}) (json
 	}
 
 	if response.Error != nil {
-		return nil, response.Error
+		return nil, fmt.Errorf("API error: %s (Code: %d)", response.Error.Message, response.Error.Code)
 	}
 
 	return response.Result, nil
@@ -362,15 +360,15 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-func verifyCertValidity(certPEM string) error {
+func verifyLocalCert(certPEM string) error {
 	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil || block.Type != "CERTIFICATE" {
-		return fmt.Errorf("failed to decode certificate PEM")
+	if block == nil {
+		return fmt.Errorf("failed to parse PEM block from certificate")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %v", err)
+		return fmt.Errorf("failed to parse x509 certificate: %v", err)
 	}
 
 	daysRemaining := time.Until(cert.NotAfter).Hours() / 24

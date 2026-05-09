@@ -5,16 +5,12 @@ import (
 	"fmt"
 	"os"
 	"testing"
-
-	"github.com/truenas/api_client_golang/truenas_api"
 )
 
 type mockTNClient struct {
-	loginFunc           func(user, pass, token string) error
-	callFunc            func(method string, timeout int64, params interface{}) (json.RawMessage, error)
-	callWithJobFunc     func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error)
-	subscribeToJobsFunc func() error
-	closeFunc           func() error
+	loginFunc func(user, pass, token string) error
+	callFunc  func(method string, timeout int64, params interface{}) (json.RawMessage, error)
+	closeFunc func() error
 }
 
 func (m *mockTNClient) Login(user, pass, token string) error {
@@ -23,28 +19,6 @@ func (m *mockTNClient) Login(user, pass, token string) error {
 
 func (m *mockTNClient) Call(method string, timeout int64, params interface{}) (json.RawMessage, error) {
 	return m.callFunc(method, timeout, params)
-}
-
-func (m *mockTNClient) CallWithJob(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
-	if m.callWithJobFunc != nil {
-		return m.callWithJobFunc(method, params, callback)
-	}
-	doneCh := make(chan string, 1)
-	doneCh <- ""
-	return &truenas_api.Job{
-		ID:       1,
-		DoneCh:   doneCh,
-		Result:   456.0,
-		Finished: true,
-		State:    "SUCCESS",
-	}, nil
-}
-
-func (m *mockTNClient) SubscribeToJobs() error {
-	if m.subscribeToJobsFunc != nil {
-		return m.subscribeToJobsFunc()
-	}
-	return nil
 }
 
 func (m *mockTNClient) Close() error {
@@ -91,6 +65,41 @@ func TestProcessCertificate_Update(t *testing.T) {
 						}
 					}
 				}
+			case "certificate.update":
+				renamed = true
+				result = 1001 // Job ID
+			case "certificate.create":
+				created = true
+				result = 1002 // Job ID
+			case "certificate.delete":
+				deleted = true
+				result = 1003 // Job ID
+			case "core.get_jobs":
+				p := params.([]interface{})
+				filters := p[0].([]interface{})
+				filter := filters[0].([]interface{})
+				// Handle both float64 (from JSON) and int64 (if passed directly)
+				var jobID int64
+				switch v := filter[2].(type) {
+				case float64:
+					jobID = int64(v)
+				case int64:
+					jobID = v
+				case int:
+					jobID = int64(v)
+				default:
+					return nil, fmt.Errorf("unexpected jobID type in filter: %T", v)
+				}
+
+				if jobID == 1002 {
+					result = []JobInfo{
+						{ID: jobID, State: "SUCCESS", Result: json.RawMessage("456")},
+					}
+				} else {
+					result = []JobInfo{
+						{ID: jobID, State: "SUCCESS", Result: json.RawMessage("true")},
+					}
+				}
 			case "system.general.update", "system.general.ui_restart":
 				result = true
 			case "system.general.config":
@@ -106,29 +115,6 @@ func TestProcessCertificate_Update(t *testing.T) {
 			}
 			data, _ := json.Marshal(envelope)
 			return json.RawMessage(data), nil
-		},
-		callWithJobFunc: func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
-			doneCh := make(chan string, 1)
-			doneCh <- ""
-			var result interface{}
-			switch method {
-			case "certificate.update":
-				renamed = true
-				result = true
-			case "certificate.create":
-				created = true
-				result = 456.0
-			case "certificate.delete":
-				deleted = true
-				result = true
-			}
-			return &truenas_api.Job{
-				ID:       1,
-				DoneCh:   doneCh,
-				Result:   result,
-				Finished: true,
-				State:    "SUCCESS",
-			}, nil
 		},
 		closeFunc: func() error { return nil },
 	}
@@ -174,6 +160,13 @@ func TestProcessCertificate_Create(t *testing.T) {
 				} else {
 					result = []interface{}{}
 				}
+			case "certificate.create":
+				created = true
+				result = 2001 // Job ID
+			case "core.get_jobs":
+				result = []JobInfo{
+					{ID: 2001, State: "SUCCESS", Result: json.RawMessage("456")},
+				}
 			case "system.general.update", "system.general.ui_restart":
 				result = true
 			case "system.general.config":
@@ -189,23 +182,6 @@ func TestProcessCertificate_Create(t *testing.T) {
 			}
 			data, _ := json.Marshal(envelope)
 			return json.RawMessage(data), nil
-		},
-		callWithJobFunc: func(method string, params interface{}, callback func(float64, string, string)) (*truenas_api.Job, error) {
-			doneCh := make(chan string, 1)
-			doneCh <- ""
-			var result interface{}
-			switch method {
-			case "certificate.create":
-				created = true
-				result = 456.0
-			}
-			return &truenas_api.Job{
-				ID:       1,
-				DoneCh:   doneCh,
-				Result:   result,
-				Finished: true,
-				State:    "SUCCESS",
-			}, nil
 		},
 		closeFunc: func() error { return nil },
 	}
