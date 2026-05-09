@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/truenas/api_client_golang/truenas_api"
@@ -113,6 +116,10 @@ func run() error {
 
 	if !strings.Contains(key, "PRIVATE KEY") {
 		return fmt.Errorf("CRITICAL: Key extraction failed. Content check failed")
+	}
+
+	if err := verifyCertValidity(cert); err != nil {
+		return fmt.Errorf("certificate validity check failed: %v", err)
 	}
 
 	fmt.Println("Step 4: Managing Certificate in TrueNAS...")
@@ -233,4 +240,24 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func verifyCertValidity(certPEM string) error {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return fmt.Errorf("failed to decode certificate PEM")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse certificate: %v", err)
+	}
+
+	daysRemaining := time.Until(cert.NotAfter).Hours() / 24
+	if daysRemaining < 30 {
+		return fmt.Errorf("certificate expires in %.1f days, which is less than the required 30 days", daysRemaining)
+	}
+
+	fmt.Printf("Certificate is valid for %.1f more days.\n", daysRemaining)
+	return nil
 }
